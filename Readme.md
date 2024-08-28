@@ -24,6 +24,8 @@ Options:
   --concurrency <N>     Number of concurrent threads to use (default: maximum)
   --matchRev <regex>    Filter data based on revision SHA in metadata
   --matchEngine <regex> Filter data based on engine name in pgns, defaults to matchRev if given
+  --matchTC <regex>     Filter data based on time control in metadata
+  --matchThreads <N>    Filter data based on used threads in metadata
   --matchBook <regex>   Filter data based on book name
   --matchBookInvert     Invert the filter
   -o <path>             Path to output epd file (default: matesieve.epd)
