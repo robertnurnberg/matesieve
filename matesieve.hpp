@@ -11,9 +11,10 @@
 #include "external/json.hpp"
 
 struct TestMetaData {
-  std::optional<std::string> book;
+  std::optional<std::string> book, new_tc, resolved_base, resolved_new, tc;
+  std::optional<int> threads;
   std::optional<bool> sprt;
-  std::optional<int> book_depth;
+  std::optional<std::vector<int>> pentanomial;
 };
 
 template <typename T = std::string>
@@ -30,21 +31,21 @@ void from_json(const nlohmann::json &nlohmann_json_j,
                TestMetaData &nlohmann_json_t) {
   auto &j = nlohmann_json_j["args"];
 
-  nlohmann_json_t.book_depth =
-      get_optional(j, "book_depth").has_value()
-          ? std::optional<int>(std::stoi(get_optional(j, "book_depth").value()))
-          : std::nullopt;
-
   nlohmann_json_t.sprt =
       j.contains("sprt") ? std::optional<bool>(true) : std::nullopt;
 
   nlohmann_json_t.book = get_optional(j, "book");
+  nlohmann_json_t.new_tc = get_optional(j, "new_tc");
+  nlohmann_json_t.resolved_base = get_optional(j, "resolved_base");
+  nlohmann_json_t.resolved_new = get_optional(j, "resolved_new");
+  nlohmann_json_t.tc = get_optional(j, "tc");
+  nlohmann_json_t.threads = get_optional<int>(j, "threads");
+
+  auto &jr = nlohmann_json_j["results"];
+  nlohmann_json_t.pentanomial =
+      get_optional<std::vector<int>>(jr, "pentanomial");
 }
 
-/// @brief Get all files from a directory.
-/// @param path
-/// @param recursive
-/// @return
 [[nodiscard]] inline std::vector<std::string>
 get_files(const std::string &path, bool recursive = false) {
   std::vector<std::string> files;
@@ -69,10 +70,6 @@ get_files(const std::string &path, bool recursive = false) {
   return files;
 }
 
-/// @brief Split into successive n-sized chunks from pgns.
-/// @param pgns
-/// @param target_chunks
-/// @return
 [[nodiscard]] inline std::vector<std::vector<std::string>>
 split_chunks(const std::vector<std::string> &pgns, int target_chunks) {
   const int chunks_size = (pgns.size() + target_chunks - 1) / target_chunks;
@@ -93,12 +90,32 @@ split_chunks(const std::vector<std::string> &pgns, int target_chunks) {
   return chunks;
 }
 
-inline bool find_argument(const std::vector<std::string> &args,
-                          std::vector<std::string>::const_iterator &pos,
-                          std::string_view arg,
-                          bool without_parameter = false) {
-  pos = std::find(args.begin(), args.end(), arg);
+class CommandLine {
+public:
+  CommandLine(int argc, char const *argv[]) {
+    for (int i = 1; i < argc; ++i) {
+      args.emplace_back(argv[i]);
+    }
+  }
 
-  return pos != args.end() &&
-         (without_parameter || std::next(pos) != args.end());
-}
+  bool has_argument(const std::string &arg,
+                    bool without_parameter = false) const {
+    const auto pos = std::find(args.begin(), args.end(), arg);
+    return pos != args.end() &&
+           (without_parameter || std::next(pos) != args.end());
+  }
+
+  std::string get_argument(const std::string &arg,
+                           std::string default_value = "") const {
+    auto it = std::find(args.begin(), args.end(), arg);
+
+    if (it != args.end() && std::next(it) != args.end()) {
+      return *std::next(it);
+    }
+
+    return default_value;
+  }
+
+private:
+  std::vector<std::string> args;
+};

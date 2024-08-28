@@ -22,7 +22,8 @@ Options:
   -r                    Search for .pgn(.gz) files recursively in subdirectories
   --allowDuplicates     Allow duplicate directories for test pgns
   --concurrency <N>     Number of concurrent threads to use (default: maximum)
-  --matchEngine <regex> Filter data based on engine name
+  --matchRev <regex>    Filter data based on revision SHA in metadata
+  --matchEngine <regex> Filter data based on engine name in pgns, defaults to matchRev if given
   --matchBook <regex>   Filter data based on book name
   --matchBookInvert     Invert the filter
   -o <path>             Path to output epd file (default: matesieve.epd)

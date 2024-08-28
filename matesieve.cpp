@@ -226,9 +226,10 @@ void ana_files(const std::vector<std::string> &files,
 [[nodiscard]] map_meta get_metadata(const std::vector<std::string> &file_list,
                                     bool allow_duplicates) {
   map_meta meta_map;
-  std::unordered_map<std::string, std::string>
-      test_map; // map to check for duplicate tests
+  // map to check for duplicate tests
+  std::unordered_map<std::string, std::string> test_map;
   std::set<std::string> test_warned;
+
   for (const auto &pathname : file_list) {
     fs::path path(pathname);
     std::string filename = path.filename().string();
@@ -265,35 +266,72 @@ void ana_files(const std::vector<std::string> &files,
       meta_map[test_filename] = metadata.get<TestMetaData>();
     }
   }
+
   return meta_map;
 }
 
-void filter_files_book(std::vector<std::string> &file_list,
-                       const map_meta &meta_map, const std::regex &regex_book,
-                       bool invert) {
-  const auto pred = [&regex_book, invert,
-                     &meta_map](const std::string &pathname) {
+template <typename STRATEGY>
+void filter_files(std::vector<std::string> &file_list, const map_meta &meta_map,
+                  const STRATEGY &strategy) {
+  const auto applier = [&](const std::string &pathname) {
     fs::path path(pathname);
     std::string filename = path.filename().string();
     std::string test_id = filename.substr(0, filename.find_first_of("-."));
     std::string test_filename = (path.parent_path() / test_id).string();
+    return strategy.apply(test_filename, meta_map);
+  };
+  const auto it = std::remove_if(file_list.begin(), file_list.end(), applier);
+  file_list.erase(it, file_list.end());
+}
 
+class BookFilterStrategy {
+  std::regex regex_book;
+  bool invert;
+
+public:
+  BookFilterStrategy(const std::regex &rb, bool inv)
+      : regex_book(rb), invert(inv) {}
+
+  bool apply(const std::string &filename, const map_meta &meta_map) const {
     // check if metadata and "book" entry exist
-    if (meta_map.find(test_filename) != meta_map.end() &&
-        meta_map.at(test_filename).book.has_value()) {
+    if (meta_map.find(filename) != meta_map.end() &&
+        meta_map.at(filename).book.has_value()) {
       bool match =
-          std::regex_match(meta_map.at(test_filename).book.value(), regex_book);
-
+          std::regex_match(meta_map.at(filename).book.value(), regex_book);
       return invert ? match : !match;
     }
 
     // missing metadata or "book" entry can never match
     return true;
-  };
+  }
+};
 
-  file_list.erase(std::remove_if(file_list.begin(), file_list.end(), pred),
-                  file_list.end());
-}
+class RevFilterStrategy {
+  std::regex regex_rev;
+
+public:
+  RevFilterStrategy(const std::regex &rb) : regex_rev(rb) {}
+
+  bool apply(const std::string &filename, const map_meta &meta_map) const {
+    if (meta_map.find(filename) == meta_map.end()) {
+      return true;
+    }
+
+    if (meta_map.at(filename).resolved_base.has_value() &&
+        std::regex_match(meta_map.at(filename).resolved_base.value(),
+                         regex_rev)) {
+      return false;
+    }
+
+    if (meta_map.at(filename).resolved_new.has_value() &&
+        std::regex_match(meta_map.at(filename).resolved_new.value(),
+                         regex_rev)) {
+      return false;
+    }
+
+    return true;
+  }
+};
 
 void process(const std::vector<std::string> &files_pgn,
              const std::string &regex_engine, int concurrency) {
@@ -333,7 +371,8 @@ void print_usage(char const *program_name) {
     ss << "  -r                    Search for .pgn(.gz) files recursively in subdirectories" << "\n";
     ss << "  --allowDuplicates     Allow duplicate directories for test pgns" << "\n";
     ss << "  --concurrency <N>     Number of concurrent threads to use (default: maximum)" << "\n";
-    ss << "  --matchEngine <regex> Filter data based on engine name" << "\n";
+    ss << "  --matchRev <regex>    Filter data based on revision SHA in metadata" << "\n";
+    ss << "  --matchEngine <regex> Filter data based on engine name in pgns, defaults to matchRev if given" << "\n";
     ss << "  --matchBook <regex>   Filter data based on book name" << "\n";
     ss << "  --matchBookInvert     Invert the filter" << "\n";
     ss << "  -o <path>             Path to output epd file (default: matesieve.epd)" << "\n";
@@ -344,71 +383,83 @@ void print_usage(char const *program_name) {
 }
 
 int main(int argc, char const *argv[]) {
-  const std::vector<std::string> args(argv + 1, argv + argc);
+  CommandLine cmd(argc, argv);
 
   std::vector<std::string> files_pgn;
+  std::string default_path = "./pgns";
   std::string regex_engine, regex_book, filename = "matesieve.epd";
   int concurrency = std::max(1, int(std::thread::hardware_concurrency()));
 
-  std::vector<std::string>::const_iterator pos;
-
-  if (std::find(args.begin(), args.end(), "--help") != args.end()) {
+  if (cmd.has_argument("--help", true)) {
     print_usage(argv[0]);
     return 0;
   }
 
-  if (find_argument(args, pos, "--concurrency")) {
-    concurrency = std::stoi(*std::next(pos));
+  if (cmd.has_argument("--concurrency")) {
+    concurrency = std::stoi(cmd.get_argument("--concurrency"));
   }
 
-  if (find_argument(args, pos, "--file")) {
-    files_pgn = {*std::next(pos)};
+  if (cmd.has_argument("--file")) {
+    files_pgn = {cmd.get_argument("--file")};
   } else {
-    std::string path = "./pgns";
+    auto path = cmd.get_argument("--dir", default_path);
 
-    if (find_argument(args, pos, "--dir")) {
-      path = *std::next(pos);
-    }
-
-    bool recursive = find_argument(args, pos, "-r", true);
+    bool recursive = cmd.has_argument("-r", true);
     std::cout << "Looking " << (recursive ? "(recursively) " : "")
               << "for pgn files in " << path << std::endl;
 
     files_pgn = get_files(path, recursive);
-  }
 
-  // sort to easily check for "duplicate" files, i.e. "foo.pgn.gz" and "foo.pgn"
-  std::sort(files_pgn.begin(), files_pgn.end());
+    // sort to easily check for "duplicate" files, i.e. "foo.pgn.gz" and
+    // "foo.pgn"
+    std::sort(files_pgn.begin(), files_pgn.end());
 
-  for (size_t i = 1; i < files_pgn.size(); ++i) {
-    if (files_pgn[i].find(files_pgn[i - 1]) == 0) {
-      std::cout << "Error: \"Duplicate\" files: " << files_pgn[i - 1] << " and "
-                << files_pgn[i] << std::endl;
-      std::exit(1);
+    for (size_t i = 1; i < files_pgn.size(); ++i) {
+      if (files_pgn[i].find(files_pgn[i - 1]) == 0) {
+        std::cout << "Error: \"Duplicate\" files: " << files_pgn[i - 1]
+                  << " and " << files_pgn[i] << std::endl;
+        std::exit(1);
+      }
     }
   }
 
-  bool allow_duplicates = find_argument(args, pos, "--allowDuplicates", true);
-  auto meta_map = get_metadata(files_pgn, allow_duplicates);
+  std::cout << "Found " << files_pgn.size() << " .pgn(.gz) files in total."
+            << std::endl;
 
-  if (find_argument(args, pos, "--matchBook")) {
-    regex_book = *std::next(pos);
+  auto meta_map =
+      get_metadata(files_pgn, cmd.has_argument("--allowDuplicates", true));
+
+  if (cmd.has_argument("--matchBook")) {
+    auto regex_book = cmd.get_argument("--matchBook");
 
     if (!regex_book.empty()) {
-      bool invert = find_argument(args, pos, "--matchBookInvert", true);
+      bool invert = cmd.has_argument("--matchBookInvert", true);
       std::cout << "Filtering pgn files " << (invert ? "not " : "")
                 << "matching the book name " << regex_book << std::endl;
-      std::regex regex(regex_book);
-      filter_files_book(files_pgn, meta_map, regex, invert);
+      filter_files(files_pgn, meta_map,
+                   BookFilterStrategy(std::regex(regex_book), invert));
     }
   }
 
-  if (find_argument(args, pos, "--matchEngine")) {
-    regex_engine = *std::next(pos);
+  if (cmd.has_argument("--matchRev")) {
+    auto regex_rev = cmd.get_argument("--matchRev");
+
+    if (!regex_rev.empty()) {
+      std::cout << "Filtering pgn files matching revision SHA " << regex_rev
+                << std::endl;
+      filter_files(files_pgn, meta_map,
+                   RevFilterStrategy(std::regex(regex_rev)));
+    }
+
+    regex_engine = regex_rev;
   }
 
-  if (find_argument(args, pos, "-o")) {
-    filename = *std::next(pos);
+  if (cmd.has_argument("--matchEngine")) {
+    regex_engine = cmd.get_argument("--matchEngine");
+  }
+
+  if (cmd.has_argument("-o")) {
+    filename = cmd.get_argument("-o");
   }
 
   std::ofstream out_file(filename);
