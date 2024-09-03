@@ -64,7 +64,6 @@ public:
 
     if (key == "FEN") {
       board.setFen(value);
-      std::cout << "FEN: " << value << std::endl;
     }
 
     if (key == "Variant" && value == "fischerandom") {
