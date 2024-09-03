@@ -121,13 +121,19 @@ public:
       if (delimiter_pos != std::string::npos && comment != "book") {
         const auto match_eval = comment.substr(0, delimiter_pos);
 
-        if (match_eval[1] == 'M') {
+        if (match_eval[1] == 'M' &&
+            (match_eval[0] == '+' || match_eval[0] == '-')) {
           auto key = Board::Compact::encode(board);
           std::int64_t mate =
               std::stoll(std::string(comment.substr(2, delimiter_pos)));
-          if (match_eval[0] == '-') {
-            mate = -mate;
+          // the M values are in plies
+          if ((match_eval[0] == '+' && mate % 2 == 0) ||
+              (match_eval[0] == '-' && mate % 2 == 1)) {
+            std::cout << "Detected eval \"" << match_eval
+                      << "\", which cannot be mate in plies." << std::endl;
+            std::exit(1);
           }
+          mate = match_eval[0] == '-' ? -mate / 2 : (mate + 1) / 2;
 
           fen_map.lazy_emplace_l(
               std::move(key),
