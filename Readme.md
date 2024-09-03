@@ -28,6 +28,8 @@ Options:
   --matchThreads <N>    Filter data based on used threads in metadata
   --matchBook <regex>   Filter data based on book name
   --matchBookInvert     Invert the filter
+  --stopEarly           Stop analysing a game as soon as countStopEarly mates have been found (default false)
+  --countStopEarly <N>  Number of mates encountered before stopping with stopEarly (default 1)
   -o <path>             Path to output epd file (default: matesieve.epd)
   --help                Print this help message
 ```

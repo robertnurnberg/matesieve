@@ -53,8 +53,10 @@ namespace analysis {
 
 class Analyze : public pgn::Visitor {
 public:
-  Analyze(const std::string &regex_engine, std::mutex &progress_output)
-      : regex_engine(regex_engine), progress_output(progress_output) {}
+  Analyze(const std::string &regex_engine, const unsigned int count_stop_early,
+          std::mutex &progress_output)
+      : regex_engine(regex_engine), count_stop_early(count_stop_early),
+        progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -144,6 +146,10 @@ public:
               [&](const fen_map_t::constructor &ctor) {
                 ctor(std::move(key), mate);
               });
+          if (count_stop_early == ++mate_count) {
+            this->skipPgn(true);
+            return;
+          }
         }
       }
     }
@@ -164,6 +170,8 @@ public:
     board.set960(false);
     board.setFen(constants::STARTPOS);
 
+    mate_count = 0;
+
     filter_side = Color::NONE;
 
     white.clear();
@@ -174,6 +182,7 @@ public:
 
 private:
   const std::string &regex_engine;
+  const unsigned int count_stop_early;
   std::mutex &progress_output;
 
   Board board;
@@ -188,15 +197,19 @@ private:
   std::string black;
 
   int whiteElo = 0, blackElo = 0;
+  unsigned int mate_count = 0;
 };
 
 void ana_files(const std::vector<std::string> &files,
-               const std::string &regex_engine, std::mutex &progress_output) {
+               const std::string &regex_engine,
+               const unsigned int count_stop_early,
+               std::mutex &progress_output) {
 
   for (const auto &file : files) {
     std::string move_counter;
     const auto pgn_iterator = [&](std::istream &iss) {
-      auto vis = std::make_unique<Analyze>(regex_engine, progress_output);
+      auto vis = std::make_unique<Analyze>(regex_engine, count_stop_early,
+                                           progress_output);
 
       pgn::StreamParser parser(iss);
 
@@ -387,7 +400,8 @@ public:
 };
 
 void process(const std::vector<std::string> &files_pgn,
-             const std::string &regex_engine, int concurrency) {
+             const std::string &regex_engine,
+             const unsigned int count_stop_early, int concurrency) {
   // Create more chunks than threads to prevent threads from idling.
   int target_chunks = 4 * concurrency;
 
@@ -404,8 +418,10 @@ void process(const std::vector<std::string> &files_pgn,
 
   for (const auto &files : files_chunked) {
 
-    pool.enqueue([&files, &regex_engine, &progress_output, &files_chunked]() {
-      analysis::ana_files(files, regex_engine, progress_output);
+    pool.enqueue([&files, &regex_engine, &count_stop_early, &progress_output,
+                  &files_chunked]() {
+      analysis::ana_files(files, regex_engine, count_stop_early,
+                          progress_output);
     });
   }
 
@@ -430,6 +446,8 @@ void print_usage(char const *program_name) {
     ss << "  --matchThreads <N>    Filter data based on used threads in metadata" << "\n";
     ss << "  --matchBook <regex>   Filter data based on book name" << "\n";
     ss << "  --matchBookInvert     Invert the filter" << "\n";
+    ss << "  --stopEarly           Stop analysing a game as soon as countStopEarly mates have been found (default false)" << "\n";
+    ss << "  --countStopEarly <N>  Number of mates encountered before stopping with stopEarly (default 1)" << "\n";
     ss << "  -o <path>             Path to output epd file (default: matesieve.epd)" << "\n";
     ss << "  --help                Print this help message" << "\n";
   // clang-format on
@@ -443,6 +461,7 @@ int main(int argc, char const *argv[]) {
   std::vector<std::string> files_pgn;
   std::string default_path = "./pgns";
   std::string regex_engine, regex_book, filename = "matesieve.epd";
+  unsigned int count_stop_early = 1;
   int concurrency = std::max(1, int(std::thread::hardware_concurrency()));
 
   if (cmd.has_argument("--help", true)) {
@@ -529,6 +548,15 @@ int main(int argc, char const *argv[]) {
     filter_files(files_pgn, meta_map, ThreadsFilterStrategy(threads));
   }
 
+  if (cmd.has_argument("--countStopEarly")) {
+    count_stop_early = std::stoi(cmd.get_argument("--countStopEarly"));
+  }
+  if (!cmd.has_argument("--stopEarly", true))
+    count_stop_early = std::numeric_limits<decltype(count_stop_early)>::max();
+  else
+    std::cout << "Running with --countStopEarly " << count_stop_early
+              << std::endl;
+
   if (cmd.has_argument("-o")) {
     filename = cmd.get_argument("-o");
   }
@@ -537,7 +565,7 @@ int main(int argc, char const *argv[]) {
 
   const auto t0 = std::chrono::high_resolution_clock::now();
 
-  process(files_pgn, regex_engine, concurrency);
+  process(files_pgn, regex_engine, count_stop_early, concurrency);
 
   for (const auto &pair : fen_map) {
     auto board = Board::Compact::decode(pair.first);
