@@ -25,7 +25,7 @@ THIS FILE IS AUTO GENERATED DO NOT CHANGE MANUALLY.
 
 Source: https://github.com/Disservin/chess-library
 
-VERSION: 0.6.66
+VERSION: 0.6.72
 */
 
 #ifndef CHESS_HPP
@@ -1120,6 +1120,7 @@ class Piece {
 }  // namespace chess
 
 namespace chess {
+
 class Move {
    public:
     Move() = default;
@@ -1135,8 +1136,11 @@ class Move {
     /// @return
     template <std::uint16_t MoveType = 0>
     [[nodiscard]] static constexpr Move make(Square source, Square target, PieceType pt = PieceType::KNIGHT) noexcept {
-        return Move(MoveType + ((std::uint16_t(pt) - std::uint16_t(PieceType(PieceType::KNIGHT))) << 12) +
-                    std::uint16_t(std::uint16_t(source.index()) << 6) + std::uint16_t(target.index()));
+        assert(pt >= PieceType(PieceType::KNIGHT) && pt <= PieceType(PieceType::QUEEN));
+
+        std::uint16_t bits_promotion = static_cast<std::uint16_t>(pt - PieceType(PieceType::KNIGHT));
+
+        return Move(MoveType + (bits_promotion << 12) + (source.index() << 6) + target.index());
     }
 
     /// @brief Get the source square of the move.
@@ -1223,18 +1227,22 @@ class Movelist {
     // Element access
 
     [[nodiscard]] constexpr reference at(size_type pos) {
+#ifndef CHESS_NO_EXCEPTIONS
         if (pos >= size_) {
             throw std::out_of_range("Movelist::at: pos (which is " + std::to_string(pos) + ") >= size (which is " +
                                     std::to_string(size_) + ")");
         }
+#endif
         return moves_[pos];
     }
 
     [[nodiscard]] constexpr const_reference at(size_type pos) const {
+#ifndef CHESS_NO_EXCEPTIONS
         if (pos >= size_) {
             throw std::out_of_range("Movelist::at: pos (which is " + std::to_string(pos) + ") >= size (which is " +
                                     std::to_string(size_) + ")");
         }
+#endif
         return moves_[pos];
     }
 
@@ -1450,6 +1458,9 @@ class movegen {
     template <Color::underlying c, MoveGenType mt>
     static void legalmoves(Movelist &movelist, const Board &board, int pieces);
 
+    template <Color::underlying c>
+    static bool isEpSquareValid(const Board &board, Square ep);
+
     friend class Board;
 };
 
@@ -1644,23 +1655,45 @@ class Zobrist {
     /// @param square
     /// @return
     [[nodiscard]] static U64 piece(Piece piece, Square square) noexcept {
+        assert(piece < 12);
+#if __cplusplus >= 202207L
+        [[assume(x < 12)]];
+#endif
         return RANDOM_ARRAY[64 * MAP_HASH_PIECE[piece] + square.index()];
     }
 
     /// @brief [Internal Usage]
     /// @param file
     /// @return
-    [[nodiscard]] static U64 enpassant(File file) noexcept { return RANDOM_ARRAY[772 + file]; }
+    [[nodiscard]] static U64 enpassant(File file) noexcept {
+        assert(int(file) < 8);
+#if __cplusplus >= 202207L
+        [[assume(x < 8)]];
+#endif
+        return RANDOM_ARRAY[772 + file];
+    }
 
     /// @brief [Internal Usage]
     /// @param castling
     /// @return
-    [[nodiscard]] static U64 castling(int castling) noexcept { return castlingKey[castling]; }
+    [[nodiscard]] static U64 castling(int castling) noexcept {
+        assert(castling >= 0 && castling < 16);
+#if __cplusplus >= 202207L
+        [[assume(x < 16)]];
+#endif
+        return castlingKey[castling];
+    }
 
     /// @brief [Internal Usage]
     /// @param idx
     /// @return
-    [[nodiscard]] static U64 castlingIndex(int idx) noexcept { return RANDOM_ARRAY[768 + idx]; }
+    [[nodiscard]] static U64 castlingIndex(int idx) noexcept {
+        assert(idx >= 0 && idx < 4);
+#if __cplusplus >= 202207L
+        [[assume(x < 4)]];
+#endif
+        return RANDOM_ARRAY[768 + idx];
+    }
 
     [[nodiscard]] static U64 sideToMove() noexcept { return RANDOM_ARRAY[780]; }
 
@@ -1772,7 +1805,7 @@ class Board {
     explicit Board(std::string_view fen = constants::STARTPOS, bool chess960 = false) {
         prev_states_.reserve(256);
         chess960_ = chess960;
-        setFenInternal(fen);
+        setFenInternal<true>(fen);
     }
 
     virtual void setFen(std::string_view fen) { setFenInternal(fen); }
@@ -1787,7 +1820,11 @@ class Board {
     void setEpd(const std::string_view epd) {
         auto parts = utils::splitString(epd, ' ');
 
+#ifndef CHESS_NO_EXCEPTIONS
         if (parts.size() < 1) throw std::runtime_error("Invalid EPD");
+#else
+        if (parts.size() < 1) return;
+#endif
 
         int hm = 0;
         int fm = 1;
@@ -1969,41 +2006,18 @@ class Board {
                 if (static_cast<bool>(ep_mask & pieces(PieceType::PAWN, ~stm_))) {
                     if constexpr (EXACT) {
                         const auto piece = at(move.from());
+
                         removePiece(piece, move.from());
                         placePiece(piece, move.to());
+
                         stm_ = ~stm_;
 
-                        int double_check = 0;
-
-                        Bitboard occ_us  = us(stm_);
-                        Bitboard occ_opp = us(~stm_);
-                        auto king_sq     = kingSq(stm_);
-
-                        Bitboard checkmask;
-                        Bitboard pin_hv;
-                        Bitboard pin_d;
+                        bool valid;
 
                         if (stm_ == Color::WHITE) {
-                            checkmask = movegen::checkMask<Color::WHITE>(*this, king_sq, double_check);
-                            pin_hv    = movegen::pinMaskRooks<Color::WHITE>(*this, king_sq, occ_opp, occ_us);
-                            pin_d     = movegen::pinMaskBishops<Color::WHITE>(*this, king_sq, occ_opp, occ_us);
+                            valid = movegen::isEpSquareValid<Color::WHITE>(*this, move.to().ep_square());
                         } else {
-                            checkmask = movegen::checkMask<Color::BLACK>(*this, king_sq, double_check);
-                            pin_hv    = movegen::pinMaskRooks<Color::BLACK>(*this, king_sq, occ_opp, occ_us);
-                            pin_d     = movegen::pinMaskBishops<Color::BLACK>(*this, king_sq, occ_opp, occ_us);
-                        }
-
-                        const auto pawns    = pieces(PieceType::PAWN, stm_);
-                        const auto pawns_lr = pawns & ~pin_hv;
-                        const auto ep       = move.to().ep_square();
-                        const auto m        = movegen::generateEPMove(*this, checkmask, pin_d, pawns_lr, ep, stm_);
-                        bool found          = false;
-
-                        for (const auto &move : m) {
-                            if (move != Move::NO_MOVE) {
-                                found = true;
-                                break;
-                            }
+                            valid = movegen::isEpSquareValid<Color::BLACK>(*this, move.to().ep_square());
                         }
 
                         // undo
@@ -2012,7 +2026,7 @@ class Board {
                         removePiece(piece, move.to());
                         placePiece(piece, move.from());
 
-                        if (found) {
+                        if (valid) {
                             assert(at(move.to().ep_square()) == Piece::NONE);
                             ep_sq_ = move.to().ep_square();
                             key_ ^= Zobrist::enpassant(move.to().ep_square().file());
@@ -2786,8 +2800,25 @@ class Board {
     bool chess960_ = false;
 
    private:
+    void placePieceInternal(Piece piece, Square sq) {
+        assert(board_[sq.index()] == Piece::NONE);
+
+        auto type  = piece.type();
+        auto color = piece.color();
+        auto index = sq.index();
+
+        assert(type != PieceType::NONE);
+        assert(color != Color::NONE);
+        assert(index >= 0 && index < 64);
+
+        pieces_bb_[type].set(index);
+        occ_bb_[color].set(index);
+        board_[index] = piece;
+    }
+
     /// @brief [Internal Usage]
     /// @param fen
+    template <bool ctor = false>
     void setFenInternal(std::string_view fen) {
         original_fen_ = fen;
 
@@ -2836,8 +2867,6 @@ class Board {
             key_ ^= Zobrist::sideToMove();
         }
 
-        if (ep_sq_ != Square::underlying::NO_SQ) key_ ^= Zobrist::enpassant(ep_sq_.file());
-
         auto square = 56;
         for (char curr : position) {
             if (isdigit(curr)) {
@@ -2846,7 +2875,14 @@ class Board {
                 square -= 16;
             } else {
                 auto p = Piece(std::string_view(&curr, 1));
-                placePiece(p, square);
+
+                // prevent warnings about virtual method bypassing virtual dispatch
+                if constexpr (ctor) {
+                    placePieceInternal(p, Square(square));
+                } else {
+                    placePiece(p, square);
+                }
+
                 key_ ^= Zobrist::piece(p, Square(square));
                 ++square;
             }
@@ -2867,7 +2903,9 @@ class Board {
                 }
             }
 
+#ifndef CHESS_NO_EXCEPTIONS
             throw std::runtime_error("Invalid position");
+#endif
         };
 
         for (char i : castling) {
@@ -2904,6 +2942,28 @@ class Board {
                 const auto side = CastlingRights::closestSide(file, king_sq.file());
                 cr_.setCastlingRight(color, side, file);
             }
+        }
+
+        // check if ep square itself is valid
+        if (ep_sq_ != Square::underlying::NO_SQ && !((ep_sq_.rank() == Rank::RANK_3 && stm_ == Color::BLACK) ||
+                                                     (ep_sq_.rank() == Rank::RANK_6 && stm_ == Color::WHITE))) {
+            ep_sq_ = Square::underlying::NO_SQ;
+        }
+
+        // check if ep square is valid, i.e. if there is a pawn that can capture it
+        if (ep_sq_ != Square::underlying::NO_SQ) {
+            bool valid;
+
+            if (stm_ == Color::WHITE) {
+                valid = movegen::isEpSquareValid<Color::WHITE>(*this, ep_sq_);
+            } else {
+                valid = movegen::isEpSquareValid<Color::BLACK>(*this, ep_sq_);
+            }
+
+            if (!valid)
+                ep_sq_ = Square::underlying::NO_SQ;
+            else
+                key_ ^= Zobrist::enpassant(ep_sq_.file());
         }
 
         key_ ^= Zobrist::castling(cr_.hashIndex());
@@ -3782,6 +3842,34 @@ inline void movegen::legalmoves(Movelist &movelist, const Board &board, int piec
         legalmoves<Color::BLACK, mt>(movelist, board, pieces);
 }
 
+template <Color::underlying c>
+inline bool movegen::isEpSquareValid(const Board &board, Square ep) {
+    const auto stm   = board.sideToMove();
+    int double_check = 0;
+
+    Bitboard occ_us  = board.us(stm);
+    Bitboard occ_opp = board.us(~stm);
+    auto king_sq     = board.kingSq(stm);
+
+    Bitboard checkmask = movegen::checkMask<c>(board, king_sq, double_check);
+    Bitboard pin_hv    = movegen::pinMaskRooks<c>(board, king_sq, occ_opp, occ_us);
+    Bitboard pin_d     = movegen::pinMaskBishops<c>(board, king_sq, occ_opp, occ_us);
+
+    const auto pawns    = board.pieces(PieceType::PAWN, stm);
+    const auto pawns_lr = pawns & ~pin_hv;
+    const auto m        = movegen::generateEPMove(board, checkmask, pin_d, pawns_lr, ep, stm);
+    bool found          = false;
+
+    for (const auto &move : m) {
+        if (move != Move::NO_MOVE) {
+            found = true;
+            break;
+        }
+    }
+
+    return found;
+}
+
 inline const std::array<std::array<Bitboard, 64>, 64> movegen::SQUARES_BETWEEN_BB = [] {
     attacks::initAttacks();
     return movegen::init_squares_between();
@@ -3829,6 +3917,20 @@ class Visitor {
     bool skip_ = false;
 };
 
+class StreamParserException : public std::exception {
+   public:
+    explicit StreamParserException(const char *message) : msg_(message) {}
+
+    explicit StreamParserException(const std::string &message) : msg_(message) {}
+
+    virtual ~StreamParserException() noexcept {}
+
+    virtual const char *what() const noexcept { return msg_.c_str(); }
+
+   protected:
+    std::string msg_;
+};
+
 template <std::size_t BUFFER_SIZE =
 #if defined(__unix__) || defined(__unix) || defined(unix) || defined(__APPLE__) || defined(__MACH__)
 #    if defined(__APPLE__) || defined(__MACH__)
@@ -3842,6 +3944,8 @@ template <std::size_t BUFFER_SIZE =
           >
 class StreamParser {
    public:
+    // Exception Class
+
     StreamParser(std::istream &stream) : stream_buffer(stream) {}
 
     void readGames(Visitor &vis) {
@@ -3866,7 +3970,8 @@ class StreamParser {
                 processBody();
             }
 
-            stream_buffer.advance();
+            if (!dont_advance_after_body) stream_buffer.advance();
+            dont_advance_after_body = false;
         });
 
         if (!pgn_end) {
@@ -3889,9 +3994,11 @@ class StreamParser {
         }
 
         void remove_suffix(std::size_t n) {
+#ifndef CHESS_NO_EXCEPTIONS
             if (n > index_) {
-                throw std::runtime_error("LineBuffer underflow");
+                throw StreamParserException("LineBuffer underflow");
             }
+#endif
 
             index_ -= n;
         }
@@ -4081,7 +4188,15 @@ class StreamParser {
                             stream_buffer.advance();
 
                             return true;
-                        } else {
+                        }
+#ifndef CHESS_NO_EXCEPTIONS
+                        else if (c == '\n') {
+                            // we missed the closing quote and read until the newline character
+                            // this is an invalid pgn, let's throw an error
+                            throw StreamParserException("Invalid PGN, missing closing quote in header");
+                        }
+#endif
+                        else {
                             backslash = false;
                         }
 
@@ -4182,11 +4297,27 @@ class StreamParser {
             return;
         }
 
-        stream_buffer.loop([this](char) {
+        stream_buffer.loop([this](char cd) {
+            if (isspace(cd)) {
+                stream_buffer.advance();
+                return false;
+            }
+
+            return true;
+        });
+
+        stream_buffer.loop([this](char cd) {
             // Pgn are build up in the following way.
             // {move_number} {move} {comment} {move} {comment} {move_number} ...
             // So we need to skip the move_number then start reading the move, then save the comment
             // then read the second move in the group. After that a move_number will follow again.
+
+            // [ is unexpected here, it probably is a new pgn and the current one is finished
+            if (cd == '[') {
+                onEnd();
+                dont_advance_after_body = true;
+                return true;
+            }
 
             // skip move number digits
             stream_buffer.loop([this](char c) {
@@ -4423,6 +4554,8 @@ class StreamParser {
     bool in_body   = false;
 
     bool pgn_end = true;
+
+    bool dont_advance_after_body = false;
 };
 }  // namespace chess::pgn
 
@@ -4588,7 +4721,9 @@ class uci {
                 }
             }
 
+#ifndef CHESS_NO_EXCEPTIONS
             throw SanParseError("Failed to parse san. At step 2: " + std::string(san) + " " + board.getFen());
+#endif
         }
 
         for (const auto &move : moves) {
@@ -4644,7 +4779,9 @@ class uci {
         std::cerr << ss.str();
 #endif
 
+#ifndef CHESS_NO_EXCEPTIONS
         throw SanParseError("Failed to parse san. At step 3: " + std::string(san) + " " + board.getFen());
+#endif
     }
 
    private:
@@ -4667,12 +4804,13 @@ class uci {
 
     template <bool PEDANTIC = false>
     [[nodiscard]] static SanMoveInformation parseSanInfo(std::string_view san) noexcept(false) {
+#ifndef CHESS_NO_EXCEPTIONS
         if constexpr (PEDANTIC) {
             if (san.length() < 2) {
                 throw SanParseError("Failed to parse san. At step 0: " + std::string(san));
             }
         }
-
+#endif
         constexpr auto parse_castle = [](std::string_view &san, SanMoveInformation &info, char castling_char) {
             info.piece = PieceType::KING;
 
@@ -4741,9 +4879,11 @@ class uci {
             index++;
             info.promotion = PieceType(sw(san[index]));
 
+#ifndef CHESS_NO_EXCEPTIONS
             if (info.promotion == PieceType::KING || info.promotion == PieceType::PAWN ||
                 info.promotion == PieceType::NONE)
                 throw SanParseError("Failed to parse promotion, during san conversion." + std::string(san));
+#endif
 
             index++;
         }
