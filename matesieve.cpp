@@ -53,10 +53,10 @@ namespace analysis {
 
 class Analyze : public pgn::Visitor {
 public:
-  Analyze(const std::string &regex_engine, const unsigned int count_stop_early,
-          std::mutex &progress_output)
-      : regex_engine(regex_engine), count_stop_early(count_stop_early),
-        progress_output(progress_output) {}
+  Analyze(std::string_view file, const std::string &regex_engine,
+          const unsigned int count_stop_early, std::mutex &progress_output)
+      : file(file), regex_engine(regex_engine),
+        count_stop_early(count_stop_early), progress_output(progress_output) {}
 
   virtual ~Analyze() {}
 
@@ -153,17 +153,22 @@ public:
         }
       }
     }
-    Move m;
 
-    m = uci::parseSan(board, move, moves);
+    try {
+      Move m = uci::parseSan(board, move, moves);
 
-    // chess-lib may call move() with empty strings for move
-    if (m == Move::NO_MOVE) {
+      // chess-lib may call move() with empty strings for move
+      if (m == Move::NO_MOVE) {
+        this->skipPgn(true);
+        return;
+      }
+
+      board.makeMove<true>(m);
+    } catch (const uci::AmbiguousMoveError &e) {
+      std::cerr << "While parsing " << file << " encountered: " << e.what()
+                << '\n';
       this->skipPgn(true);
-      return;
     }
-
-    board.makeMove<true>(m);
   }
 
   void endPgn() override {
@@ -181,6 +186,7 @@ public:
   }
 
 private:
+  std::string_view file;
   const std::string &regex_engine;
   const unsigned int count_stop_early;
   std::mutex &progress_output;
@@ -208,7 +214,7 @@ void ana_files(const std::vector<std::string> &files,
   for (const auto &file : files) {
     std::string move_counter;
     const auto pgn_iterator = [&](std::istream &iss) {
-      auto vis = std::make_unique<Analyze>(regex_engine, count_stop_early,
+      auto vis = std::make_unique<Analyze>(file, regex_engine, count_stop_early,
                                            progress_output);
 
       pgn::StreamParser parser(iss);
