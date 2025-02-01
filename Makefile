@@ -22,7 +22,7 @@ SRC_FILE = matesieve.cpp
 EXT_SRC_FILE = external/gzip/gzstream.cpp
 EXE_FILE = matesieve
 HEADERS = matesieve.hpp
-EXT_HEADERS = external/chess.hpp external/json.hpp external/threadpool.hpp external/gzip/gzstream.h external/parallel_hashmap/phmap.h matesieve.hpp
+EXT_HEADERS = external/chess.hpp external/json.hpp external/threadpool.hpp external/gzip/gzstream.h external/parallel_hashmap/phmap.h
 
 all: $(EXE_FILE)
 
