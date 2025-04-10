@@ -34,4 +34,4 @@ Options:
   --help                Print this help message
 ```
 
-The code is based on a [WDL model](https://github.com/official-stockfish/WDL_model) and [fastpopular](https://github.com/vondele/fastpopular).
+The code is based on [WDL model](https://github.com/official-stockfish/WDL_model) and [fastpopular](https://github.com/vondele/fastpopular).
